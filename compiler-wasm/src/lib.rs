@@ -11,6 +11,7 @@ use gleam_core::{
         Mode, NullTelemetry, PackageCompiler, StaleTracker, Target, TargetCodegenConfiguration,
     },
     config::PackageConfig,
+    error::{FileIoAction, FileKind},
     io::{FileSystemReader, FileSystemWriter},
     metadata, paths,
     type_::ModuleInterface,
@@ -173,17 +174,32 @@ fn do_compile_package(project: Project, target: Target) -> Result<(), Error> {
     let lib = Utf8PathBuf::from("/lib");
     let out = Utf8PathBuf::from("/build");
     let package = Utf8PathBuf::from("/");
+    let config_path = Utf8PathBuf::from("/gleam.toml");
 
     let mut type_manifests = load_libraries(&ids, &project.fs, &lib)?;
     let mut defined_modules = im::HashMap::new();
     #[allow(clippy::arc_with_non_send_sync)]
     let warning_emitter = WarningEmitter::new(Rc::new(project.warnings));
-    let config = PackageConfig {
-        name: "library".into(),
-        version: Version::new(1, 0, 0),
-        target,
-        // TODO: allow manipulation of the `PackageConfig`, like declaring dependencies.
-        ..Default::default()
+
+    let config = if project.fs.is_file(&config_path) {
+        // Try loading the config file if it exists.
+        let toml = project.fs.read(&config_path)?;
+        let config: PackageConfig = toml::from_str(&toml).map_err(|e| Error::FileIo {
+            action: FileIoAction::Parse,
+            kind: FileKind::File,
+            path: config_path,
+            err: Some(e.to_string()),
+        })?;
+        config.check_gleam_compatibility()?;
+        config
+    } else {
+        // Fallback to previous behavior when there's no config file.
+        PackageConfig {
+            name: "library".into(),
+            version: Version::new(1, 0, 0),
+            target,
+            ..Default::default()
+        }
     };
 
     let target = match target {
